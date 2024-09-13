@@ -42,30 +42,54 @@ bool do_exec(int count, ...)
 {
     va_list args;
     va_start(args, count);
-    char * command[count+1];
+    char *command[count + 1];
     int i;
-    for(i=0; i<count; i++)
+    for (i = 0; i < count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
 
     va_end(args);
 
-    return true;
+    /*
+     * TODO:
+     *   Execute a system command by calling fork, execv(),
+     *   and wait instead of system (see LSP page 161).
+     *   Use the command[0] as the full path to the command to execute
+     *   (first argument to execv), and use the remaining arguments
+     *   as second argument to the execv() command.
+     *
+     */
+    pid_t pid = fork();
+    if (pid == -1) // Failure
+    {
+        perror("fork failed!");
+        return false;
+    }
+
+    if (pid == 0) // Child process
+    {
+        execv(command[0], command);
+    }
+    // Else, parent process
+    /*
+     * waitpid() to communicate information about process' termination.
+     * This information is stored in status.
+     */
+    int status;
+    if (waitpid(pid, &status, 0) == -1)
+    {
+        perror("waitpid failed!");
+        return false;
+    }
+
+    // Checking if the child process exited normally AND if the exit code is 0 (success)
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        return true;
+    }
+    return false;
 }
 
 /**

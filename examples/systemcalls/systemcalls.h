@@ -2,6 +2,10 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <syslog.h>
+#include <sys/types.h>
+#include <wait.h>
+#include <unistd.h>
 
 bool do_system(const char *command);
 
