@@ -4,7 +4,6 @@ CROSS_COMPILE ?=
 # Compiler and flags
 CC = $(CROSS_COMPILE)gcc
 CFLAGS = -g -Wall -Werror
-LDFLAGS = -I/
 
 # Target binary
 TARGET = aesdsocket
@@ -15,14 +14,11 @@ OBJ = $(SRC:.c=.o)
 
 # Default
 all: $(TARGET)
+default: $(TARGET)
 
 # Build executable from object files
-$(TARGET): $(OBJ)
-	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJ)
-
-# Compile .c files into .o files
-%.o: %.c 
-	$(CC) $(CFLAGS) -c $< -o $@
+$(TARGET): $(TARGET).c
+	$(CC) $(CFLAGS) -o $@ $^
 
 # Clean
 clean:
