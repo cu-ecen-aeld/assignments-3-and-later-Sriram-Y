@@ -10,18 +10,31 @@
 #include <unistd.h>
 #include <syslog.h>
 #include <signal.h>
+#include <pthread.h>
+#include <time.h>
 
 #define PORT "9000"
 #define BUFFER_SIZE 1024
 #define DATA_FILE "/var/tmp/aesdsocketdata"
+#define TIMESTAMP_INTERVAL 10
 
 volatile sig_atomic_t is_running = 1;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct thread_node
+{
+    pthread_t thread_id;
+    struct thread_node *next;
+};
+struct thread_node *head = NULL;
 
 void signal_handler(int signal);
 void *get_address(struct sockaddr *address);
 void configure_signal_handling();
 int setup_server_socket();
-void handle_client_connection(int client_fd);
+void *handle_client_connection(void *client_fd_ptr);
+void cleanup_threads();
+void *timestamp_thread_func(void *arg);
 
 int main(int argc, char *argv[])
 {
@@ -44,6 +57,10 @@ int main(int argc, char *argv[])
     int server_fd = setup_server_socket();
     syslog(LOG_USER, "Server is waiting for connections...\n");
 
+    // Start a timestamp thread, writes timestap to file
+    pthread_t timestamp_thread;
+    pthread_create(&timestamp_thread, NULL, timestamp_thread_func, NULL);
+
     while (is_running)
     {
         struct sockaddr_storage client_addr;
@@ -60,10 +77,24 @@ int main(int argc, char *argv[])
         inet_ntop(client_addr.ss_family, get_address((struct sockaddr *)&client_addr), address_buffer, sizeof(address_buffer));
         syslog(LOG_USER, "Accepted connection from %s\n", address_buffer);
 
-        handle_client_connection(client_fd);
-        syslog(LOG_USER, "Closed connection from %s\n", address_buffer);
+        // Create a thread for the client connection
+        int *client_fd_ptr = malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
+
+        pthread_t client_thread;
+        pthread_create(&client_thread, NULL, handle_client_connection, client_fd_ptr);
+
+        // Add the new thread to the linked list
+        struct thread_node *new_node = malloc(sizeof(struct thread_node));
+        new_node->thread_id = client_thread;
+        new_node->next = head;
+        head = new_node;
     }
 
+    // Clean up
+    cleanup_threads();
+    pthread_cancel(timestamp_thread);
+    pthread_join(timestamp_thread, NULL);
     remove(DATA_FILE);
     close(server_fd);
     return 0;
@@ -167,37 +198,78 @@ int setup_server_socket()
     return server_fd;
 }
 
-void handle_client_connection(int client_fd)
+void *handle_client_connection(void *client_fd_ptr)
 {
+    int client_fd = *(int *)client_fd_ptr;
+    free(client_fd_ptr);
     char buffer[BUFFER_SIZE];
     ssize_t bytes_received;
+
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(DATA_FILE, "a+b");
+    pthread_mutex_unlock(&file_mutex);
 
     if (file == NULL)
     {
         perror("File open failed");
-        return;
+        close(client_fd);
+        return NULL;
     }
 
     while ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0)
     {
+        pthread_mutex_lock(&file_mutex);
         fwrite(buffer, 1, bytes_received, file);
+        fflush(file);
         fseek(file, 0, SEEK_SET);
 
-        for (ssize_t i = 0; i < bytes_received; i++)
+        // Send back the file content after each write
+        char character;
+        while ((character = fgetc(file)) != EOF)
         {
-            if (buffer[i] == '\n')
-            {
-                // Read the file and send its content
-                char character;
-                while ((character = fgetc(file)) != EOF)
-                {
-                    send(client_fd, &character, 1, 0);
-                }
-            }
+            send(client_fd, &character, 1, 0);
         }
+        pthread_mutex_unlock(&file_mutex);
     }
 
     fclose(file);
     close(client_fd);
+    return NULL;
+}
+
+void cleanup_threads()
+{
+    struct thread_node *current = head;
+    while (current)
+    {
+        pthread_join(current->thread_id, NULL);
+        struct thread_node *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+void *timestamp_thread_func(void *arg)
+{
+    while (is_running)
+    {
+        sleep(TIMESTAMP_INTERVAL);
+
+        time_t now = time(NULL);
+        struct tm *time_info = localtime(&now);
+
+        char timestamp[BUFFER_SIZE];
+        strftime(timestamp, sizeof(timestamp), "timestamp:%Y-%m-%d %H:%M:%S\n", time_info);
+
+        pthread_mutex_lock(&file_mutex);
+        FILE *file = fopen(DATA_FILE, "a+b");
+        if (file)
+        {
+            fwrite(timestamp, sizeof(char), strlen(timestamp), file);
+            fflush(file);
+            fclose(file);
+        }
+        pthread_mutex_unlock(&file_mutex);
+    }
+    return NULL;
 }

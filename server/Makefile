@@ -18,7 +18,7 @@ default: $(TARGET)
 
 # Build executable from object files
 $(TARGET): $(TARGET).c
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -pthread -o $@ $^
 
 # Clean
 clean:
