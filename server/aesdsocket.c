@@ -15,8 +15,17 @@
 
 #define PORT "9000"
 #define BUFFER_SIZE 1024
-#define DATA_FILE "/var/tmp/aesdsocketdata"
 #define TIMESTAMP_INTERVAL 10
+
+#define USE_AESD_CHAR_DEVICE 1
+
+int sockfd;
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/var/tmp/aesdsocketdata"
+#else
+#define DATA_FILE "/dev/aesdchar"
+#endif
 
 volatile sig_atomic_t is_running = 1;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -57,9 +66,11 @@ int main(int argc, char *argv[])
     int server_fd = setup_server_socket();
     syslog(LOG_USER, "Server is waiting for connections...\n");
 
+    #ifndef USE_AESD_CHAR_DEVICE
     // Start a timestamp thread, writes timestap to file
     pthread_t timestamp_thread;
     pthread_create(&timestamp_thread, NULL, timestamp_thread_func, NULL);
+    #endif
 
     while (is_running)
     {
@@ -93,9 +104,11 @@ int main(int argc, char *argv[])
 
     // Clean up
     cleanup_threads();
+    #ifndef USE_AESD_CHAR_DEVICE
     pthread_cancel(timestamp_thread);
     pthread_join(timestamp_thread, NULL);
     remove(DATA_FILE);
+    #endif
     close(server_fd);
     return 0;
 }
