@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <time.h>
+#include <fcntl.h>
 
 #define PORT "9000"
 #define BUFFER_SIZE 1024
@@ -219,10 +220,10 @@ void *handle_client_connection(void *client_fd_ptr)
     ssize_t bytes_received;
 
     pthread_mutex_lock(&file_mutex);
-    FILE *file = fopen(DATA_FILE, "a+b");
+    int file_fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, 0666);
     pthread_mutex_unlock(&file_mutex);
 
-    if (file == NULL)
+    if (file_fd == -1)
     {
         perror("File open failed");
         close(client_fd);
@@ -231,24 +232,24 @@ void *handle_client_connection(void *client_fd_ptr)
 
     while ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0)
     {
-        printf("Received data: %.*s\n", (int)bytes_received, buffer);
+        syslog(LOG_USER, "Received data: %.*s\n", (int)bytes_received, buffer);
 
         pthread_mutex_lock(&file_mutex);
-        fwrite(buffer, 1, bytes_received, file);
-        fflush(file);
-        fseek(file, 0, SEEK_SET);
+        write(file_fd, buffer, bytes_received);
+        lseek(file_fd, 0, SEEK_SET);
 
         // Send back the file content after each write
         char character;
-        while ((character = fgetc(file)) != EOF)
+        while (read(file_fd, &character, 1) > 0)
         {
             send(client_fd, &character, 1, 0);
-            printf("Sent data: %c\n", character);  // Print each character being sent
+            syslog(LOG_USER, "Sent data: %c\n", character);
         }
+        lseek(file_fd, 0, SEEK_END);
         pthread_mutex_unlock(&file_mutex);
     }
 
-    fclose(file);
+    close(file_fd);
     close(client_fd);
     return NULL;
 }
@@ -278,12 +279,11 @@ void *timestamp_thread_func(void *arg)
         strftime(timestamp, sizeof(timestamp), "timestamp:%Y-%m-%d %H:%M:%S\n", time_info);
 
         pthread_mutex_lock(&file_mutex);
-        FILE *file = fopen(DATA_FILE, "a+b");
-        if (file)
+        int fd = open(DATA_FILE, O_RDWR | O_CREAT | O_TRUNC, 0666);
+        if (fd != -1)
         {
-            fwrite(timestamp, sizeof(char), strlen(timestamp), file);
-            fflush(file);
-            fclose(file);
+            write(fd, timestamp, strlen(timestamp));
+            close(fd);
         }
         pthread_mutex_unlock(&file_mutex);
     }
