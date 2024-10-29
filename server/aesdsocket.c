@@ -249,7 +249,12 @@ void *handle_client_connection(void *client_fd_ptr)
         pthread_mutex_unlock(&file_mutex);
     }
 
+    pthread_mutex_lock(&file_mutex);
     close(file_fd);
+    pthread_mutex_unlock(&file_mutex);
+    
+    memset(buffer, 0, sizeof(buffer));
+
     close(client_fd);
     return NULL;
 }
