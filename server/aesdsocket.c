@@ -231,6 +231,8 @@ void *handle_client_connection(void *client_fd_ptr)
 
     while ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0)
     {
+        printf("Received data: %.*s\n", (int)bytes_received, buffer);
+
         pthread_mutex_lock(&file_mutex);
         fwrite(buffer, 1, bytes_received, file);
         fflush(file);
@@ -241,6 +243,7 @@ void *handle_client_connection(void *client_fd_ptr)
         while ((character = fgetc(file)) != EOF)
         {
             send(client_fd, &character, 1, 0);
+            printf("Sent data: %c\n", character);  // Print each character being sent
         }
         pthread_mutex_unlock(&file_mutex);
     }
