@@ -118,7 +118,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     }
 
     str_buf = kmalloc(count, GFP_KERNEL);
-    if (str_buf == NULL)
+    if (!str_buf)
     {
         return -ENOMEM;
     }
@@ -126,7 +126,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     if (copy_from_user(str_buf, buf, count) != 0)
     {
         kfree(str_buf);
-        return -EINVAL;
+        return -EFAULT;
     }
 
     if (mutex_lock_interruptible(&device->next_line_mtx) != 0)
@@ -226,6 +226,7 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
     mutex_init(&aesd_device.buffer_mutex);
+    mutex_init(&aesd_device.next_line_mtx); // Initialize the next line mutex
     aesd_circular_buffer_init(&aesd_device.buffer);
 
     result = aesd_setup_cdev(&aesd_device);
@@ -246,6 +247,10 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
+    if (aesd_device.next_line) // Check for NULL before freeing
+    {
+        kfree(aesd_device.next_line);
+    }
 
     int i;
     for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
@@ -254,7 +259,6 @@ void aesd_cleanup_module(void)
         aesd_circular_buffer_add_entry(&aesd_device.buffer, &null_entry);
     }
 
-    kfree(aesd_device.next_line);
     mutex_destroy(&aesd_device.buffer_mutex);
     mutex_destroy(&aesd_device.next_line_mtx);
 
