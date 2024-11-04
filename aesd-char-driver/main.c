@@ -24,6 +24,7 @@
 
 #include "aesd-circular-buffer.h"
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 
 int aesd_major = 0; // use dynamic major
 int aesd_minor = 0;
@@ -41,6 +42,7 @@ int aesd_fsync(struct file *fp, loff_t unused1, loff_t unused2, int datasync);
 static int aesd_setup_cdev(struct aesd_dev *dev);
 int aesd_init_module(void);
 void aesd_cleanup_module(void);
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 struct aesd_dev aesd_device;
 
@@ -51,7 +53,8 @@ struct file_operations aesd_fops = {
     .open = aesd_open,
     .release = aesd_release,
     .llseek = aesd_llseek,
-    .fsync = aesd_fsync};
+    .fsync = aesd_fsync,
+    .unlocked_ioctl = aesd_ioctl};
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -272,6 +275,75 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
         printk(KERN_ERR "Error %d adding aesd cdev", err);
     }
     return err;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_seekto seekto;
+    struct aesd_dev *device = filp->private_data;
+    struct aesd_buffer_entry *entry;
+    int i;
+    loff_t new_pos = 0;
+    uint32_t command_count = 0;
+
+    if (cmd != AESDCHAR_IOCSEEKTO)
+    {
+        return -ENOTTY;
+    }
+
+    // copy data from user space
+    if (copy_from_user(&seekto, (void __user *)arg, sizeof(seekto)))
+    {
+        return -EFAULT;
+    }
+
+    // exclusive access to circular buffer.
+    if (mutex_lock_interruptible(&device->buffer_mutex))
+    {
+        return -EINTR;
+    }
+
+    // count valid entries
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &device->buffer, i)
+    {
+        if (entry->buffptr != NULL)
+        {
+            command_count++;
+        }
+    }
+
+    if (seekto.write_cmd >= command_count)
+    {
+        mutex_unlock(&device->buffer_mutex);
+        return -EINVAL;
+    }
+
+    command_count = 0;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &device->buffer, i)
+    {
+        if (entry->buffptr != NULL)
+        {
+            if (command_count == seekto.write_cmd)
+            {
+                // will we go over the command length
+                if (seekto.write_cmd_offset >= entry->size)
+                {
+                    mutex_unlock(&device->buffer_mutex);
+                    return -EINVAL;
+                }
+                new_pos += seekto.write_cmd_offset;
+                break;
+            }
+            new_pos += entry->size;
+            command_count++;
+        }
+    }
+
+    // update file position pointer
+    filp->f_pos = new_pos;
+    mutex_unlock(&device->buffer_mutex);
+
+    return 0;
 }
 
 int aesd_init_module(void)
