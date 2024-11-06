@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -13,6 +14,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <fcntl.h>
+
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT "9000"
 #define BUFFER_SIZE 1024
@@ -67,11 +70,11 @@ int main(int argc, char *argv[])
     int server_fd = setup_server_socket();
     syslog(LOG_USER, "Server is waiting for connections...\n");
 
-    #ifndef USE_AESD_CHAR_DEVICE
+#ifndef USE_AESD_CHAR_DEVICE
     // Start a timestamp thread, writes timestap to file
     pthread_t timestamp_thread;
     pthread_create(&timestamp_thread, NULL, timestamp_thread_func, NULL);
-    #endif
+#endif
 
     while (is_running)
     {
@@ -105,11 +108,11 @@ int main(int argc, char *argv[])
 
     // Clean up
     cleanup_threads();
-    #ifndef USE_AESD_CHAR_DEVICE
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_cancel(timestamp_thread);
     pthread_join(timestamp_thread, NULL);
     remove(DATA_FILE);
-    #endif
+#endif
     close(server_fd);
     return 0;
 }
@@ -232,28 +235,50 @@ void *handle_client_connection(void *client_fd_ptr)
 
     while ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0)
     {
-        syslog(LOG_USER, "Received data: %.*s\n", (int)bytes_received, buffer);
+        buffer[bytes_received] = '\0';
 
-        pthread_mutex_lock(&file_mutex);
-        write(file_fd, buffer, bytes_received);
-        lseek(file_fd, 0, SEEK_SET);
-
-        // Send back the file content after each write
-        char character;
-        while (read(file_fd, &character, 1) > 0)
+        unsigned int cmd_idx, cmd_offset;
+        if (sscanf(buffer, "AESDCHAR_IOCSEEKTO:%u,%u", &cmd_idx, &cmd_offset) == 2)
         {
-            send(client_fd, &character, 1, 0);
-            syslog(LOG_USER, "Sent data: %c\n", character);
+            struct aesd_seekto seekto = {
+                .write_cmd = cmd_idx,
+                .write_cmd_offset = cmd_offset
+            };
+
+            // use ioctl to seek within the AESD character device
+            if (ioctl(file_fd, AESDCHAR_IOCSEEKTO, &seekto) == -1)
+            {
+                syslog(LOG_ERR, "ioctl AESDCHAR_IOCSEEKTO failed: %s", strerror(errno));
+            }
+            else
+            {
+                // send back the content starting from this offset when the seek is successful
+                char character;
+                while (read(file_fd, &character, 1) > 0)
+                {
+                    send(client_fd, &character, 1, 0);
+                }
+            }
         }
-        lseek(file_fd, 0, SEEK_END);
-        pthread_mutex_unlock(&file_mutex);
+        else
+        {
+            pthread_mutex_lock(&file_mutex);
+            write(file_fd, buffer, bytes_received);
+            lseek(file_fd, 0, SEEK_SET);
+
+            char character;
+            while (read(file_fd, &character, 1) > 0)
+            {
+                send(client_fd, &character, 1, 0);
+            }
+            lseek(file_fd, 0, SEEK_END);
+            pthread_mutex_unlock(&file_mutex);
+        }
     }
 
     pthread_mutex_lock(&file_mutex);
     close(file_fd);
     pthread_mutex_unlock(&file_mutex);
-    
-    memset(buffer, 0, sizeof(buffer));
 
     close(client_fd);
     return NULL;
